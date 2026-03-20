@@ -1,0 +1,33 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.js",
+    "build": "node --check src/server.js",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@chainsafe/libp2p-noise": "^17.0.0",
+    "@chainsafe/libp2p-yamux": "^8.0.1",
+    "@libp2p/bootstrap": "^12.0.14",
+    "@libp2p/circuit-relay-v2": "^4.1.6",
+    "@libp2p/identify": "^4.0.13",
+    "@libp2p/ping": "^3.0.13",
+    "@libp2p/websockets": "^10.1.6",
+    "@multiformats/multiaddr": "^13.0.1",
+    "better-sqlite3": "^12.8.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "it-length-prefixed": "^10.0.1",
+    "it-pipe": "^3.0.1",
+    "libp2p": "^3.1.6",
+    "pino": "^10.3.1",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.4",
+    "vitest": "^1.6.1"
+  }
+}
