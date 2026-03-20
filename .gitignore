@@ -4,3 +4,4 @@ dist
 coverage
 backend/.data
 .data
+pnpm-workspace.yaml

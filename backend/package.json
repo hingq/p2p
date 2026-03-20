@@ -17,7 +17,6 @@
     "@libp2p/ping": "^3.0.13",
     "@libp2p/websockets": "^10.1.6",
     "@multiformats/multiaddr": "^13.0.1",
-    "better-sqlite3": "^12.8.0",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "it-length-prefixed": "^10.0.1",
