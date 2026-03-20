@@ -52,6 +52,14 @@ describe('chat app', () => {
 
     const nodeState = await app.start()
     const peer = await app.connectToPeer('/ip4/203.0.113.10/tcp/15002/ws/p2p/12D3KooWremote')
+    expect(app.listConversations()).toEqual([
+      expect.objectContaining({
+        conversationId: 'peer:12D3KooWremote',
+        lastMessageText: null,
+        participants: ['12D3KooWlocal', '12D3KooWremote']
+      })
+    ])
+
     const message = await app.sendMessage({
       peerId: peer.peerId,
       text: 'hello remote peer'
@@ -112,5 +120,25 @@ describe('chat app', () => {
         message: expect.objectContaining({ text: 'hello local peer' })
       })
     ])
+  })
+
+  it('returns node addresses when start is called after the node is already running', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'p2p-chat-app-'))
+    tempDirs.push(directory)
+
+    const transport = createFakeTransport()
+    delete transport.addresses
+    const app = createChatApp({
+      dataDirectory: directory,
+      transport
+    })
+
+    await app.start()
+
+    expect(await app.start()).toEqual({
+      peerId: '12D3KooWlocal',
+      addresses: ['/ip4/127.0.0.1/tcp/15002/ws'],
+      connectionCount: 0
+    })
   })
 })

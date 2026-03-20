@@ -266,11 +266,7 @@ function createInitialState(initialState) {
           <form class="stack" @submit.prevent="connectPeer">
             <label class="field">
               <span>目标 multiaddr</span>
-              <textarea
-                v-model="connectForm.multiaddr"
-                rows="3"
-                placeholder="/ip4/127.0.0.1/tcp/15002/ws/p2p/..."
-              />
+              <textarea v-model="connectForm.multiaddr" rows="3" placeholder="/ip4/127.0.0.1/tcp/15002/ws/p2p/..." />
             </label>
             <button class="primary-button" type="submit">连接</button>
             <p v-if="connectForm.error" class="error-text">{{ connectForm.error }}</p>
@@ -283,14 +279,9 @@ function createInitialState(initialState) {
             <button class="ghost-button" type="button" @click="refreshConversations">刷新</button>
           </div>
           <div class="conversation-list">
-            <button
-              v-for="conversation in state.conversations"
-              :key="conversation.conversationId"
-              class="conversation-card"
-              :class="{ active: conversation.conversationId === selectedConversationId }"
-              type="button"
-              @click="selectConversation(conversation.conversationId)"
-            >
+            <button v-for="conversation in state.conversations" :key="conversation.conversationId"
+              class="conversation-card" :class="{ active: conversation.conversationId === selectedConversationId }"
+              type="button" @click="selectConversation(conversation.conversationId)">
               <strong>{{ conversation.title }}</strong>
               <span>{{ conversation.lastMessageText ?? '暂无消息' }}</span>
             </button>
@@ -308,12 +299,8 @@ function createInitialState(initialState) {
         </div>
 
         <div class="message-list">
-          <article
-            v-for="message in selectedMessages"
-            :key="message.id"
-            class="message-card"
-            :class="message.direction === 'out' ? 'outbound' : 'inbound'"
-          >
+          <article v-for="message in selectedMessages" :key="message.id" class="message-card"
+            :class="message.direction === 'out' ? 'outbound' : 'inbound'">
             <p class="message-text">{{ message.text }}</p>
             <div class="message-meta">
               <span>{{ message.from }}</span>
@@ -328,11 +315,7 @@ function createInitialState(initialState) {
         <form class="composer" @submit.prevent="sendMessage">
           <label class="field">
             <span>消息内容</span>
-            <textarea
-              v-model="composer.text"
-              rows="4"
-              placeholder="输入要发送给当前 peer 的文本消息"
-            />
+            <textarea v-model="composer.text" rows="4" placeholder="输入要发送给当前 peer 的文本消息" />
           </label>
           <div class="composer-actions">
             <p v-if="composer.error" class="error-text">{{ composer.error }}</p>
@@ -362,7 +345,7 @@ function createInitialState(initialState) {
 
 .shell {
   min-height: 100vh;
-  padding: 32px;
+  /* padding: 32px; */
 }
 
 .hero {
@@ -434,18 +417,24 @@ h1 {
 }
 
 .layout {
+  margin: 12px;
   display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-  gap: 24px;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
 }
 
 .sidebar {
   display: grid;
   gap: 24px;
+
+  .panel {
+    width: 25vw;
+  }
 }
 
 .panel {
   padding: 20px;
+  width: 70vw;
 }
 
 .panel-title-row,
@@ -516,11 +505,12 @@ button {
 .conversation-card {
   display: grid;
   gap: 6px;
-  width: 100%;
   border: 1px solid rgba(24, 34, 45, 0.1);
   background: rgba(255, 255, 255, 0.75);
-  padding: 16px;
+  padding: 12px;
   text-align: left;
+  width: 300px;
+  overflow: hidden;
 }
 
 .conversation-card.active {

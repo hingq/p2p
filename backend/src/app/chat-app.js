@@ -17,6 +17,7 @@ export function createChatApp({ dataDirectory, transport, store }) {
   const emitter = new EventEmitter()
 
   let localPeerId = null
+  let localAddresses = []
   let started = false
 
   async function start() {
@@ -24,6 +25,7 @@ export function createChatApp({ dataDirectory, transport, store }) {
       activeStore.initialize()
       const nodeState = await transport.start()
       localPeerId = nodeState.peerId
+      localAddresses = nodeState.addresses ?? []
       started = true
 
       transport.on('message:received', handleIncomingMessage)
@@ -35,7 +37,7 @@ export function createChatApp({ dataDirectory, transport, store }) {
 
     return {
       peerId: localPeerId,
-      addresses: transport.addresses ?? [],
+      addresses: localAddresses,
       connectionCount: 0
     }
   }
@@ -48,17 +50,25 @@ export function createChatApp({ dataDirectory, transport, store }) {
     transport.off?.('message:received', handleIncomingMessage)
     await transport.stop()
     activeStore.close()
+    localAddresses = []
     started = false
   }
 
   async function connectToPeer(multiaddr) {
     const peer = await transport.connectToPeer(multiaddr)
+    const connectedAt = Date.now()
 
     activeStore.upsertPeer({
       peerId: peer.peerId,
       addrs: [multiaddr],
-      lastSeen: Date.now(),
+      lastSeen: connectedAt,
       status: peer.status ?? 'connected'
+    })
+    activeStore.upsertConversation({
+      conversationId: createDirectConversationId(peer.peerId),
+      type: 'direct',
+      participants: [localPeerId, peer.peerId],
+      updatedAt: connectedAt
     })
 
     emitter.emit('peer:connected', peer)
