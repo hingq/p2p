@@ -98,6 +98,13 @@ describe('file store', () => {
         updatedAt: 1
       })
     ])
+    expect(store.listPeers()).toEqual([
+      expect.objectContaining({
+        peerId: 'peer-b',
+        addrs: ['/ip4/127.0.0.1/tcp/15002/ws'],
+        status: 'connected'
+      })
+    ])
     expect(existsSync(join(directory, 'peers.json'))).toBe(true)
     expect(existsSync(join(directory, 'conversations.json'))).toBe(true)
     expect(existsSync(join(directory, 'messages.json'))).toBe(true)

@@ -67,6 +67,12 @@ describe('sqlite store', () => {
     })
 
     store.initialize()
+    store.upsertPeer({
+      peerId: 'peer-b',
+      addrs: ['/ip4/127.0.0.1/tcp/15002/ws'],
+      lastSeen: 1,
+      status: 'connected'
+    })
     store.upsertConversation({
       conversationId: 'peer:peer-b',
       type: 'direct',
@@ -96,6 +102,13 @@ describe('sqlite store', () => {
         conversationId: 'peer:peer-b',
         lastMessageText: 'hello',
         updatedAt: 1
+      })
+    ])
+    expect(store.listPeers()).toEqual([
+      expect.objectContaining({
+        peerId: 'peer-b',
+        addrs: ['/ip4/127.0.0.1/tcp/15002/ws'],
+        status: 'connected'
       })
     ])
   })

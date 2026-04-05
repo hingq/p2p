@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/server.js",
-    "build": "node --check src/server.js",
+    "chat:tui": "node src/terminal.js",
+    "build": "node --check src/server.js && node --check src/terminal.js && node --check src/terminal/create-terminal-app.js",
     "test": "vitest run"
   },
   "dependencies": {

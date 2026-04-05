@@ -68,6 +68,13 @@ describe('chat app', () => {
     expect(nodeState.peerId).toBe('12D3KooWlocal')
     expect(peer.peerId).toBe('12D3KooWremote')
     expect(message.status).toBe('sent')
+    expect(app.listPeers()).toEqual([
+      expect.objectContaining({
+        peerId: '12D3KooWremote',
+        addrs: ['/ip4/203.0.113.10/tcp/15002/ws/p2p/12D3KooWremote'],
+        status: 'connected'
+      })
+    ])
     expect(app.listConversations()).toEqual([
       expect.objectContaining({
         conversationId: 'peer:12D3KooWremote',

@@ -130,6 +130,24 @@ export class SqliteStore {
       .all(conversationId)
   }
 
+  listPeers() {
+    return this.database
+      .prepare(`
+        SELECT
+          peer_id AS peerId,
+          addrs,
+          last_seen AS lastSeen,
+          status
+        FROM peers
+        ORDER BY peer_id ASC
+      `)
+      .all()
+      .map((peer) => ({
+        ...peer,
+        addrs: parseJson(peer.addrs, [])
+      }))
+  }
+
   listConversations() {
     return this.database
       .prepare(`

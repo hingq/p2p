@@ -131,6 +131,10 @@ export function createChatApp({ dataDirectory, transport, store }) {
     }))
   }
 
+  function listPeers() {
+    return activeStore.listPeers()
+  }
+
   function getMessages(conversationId) {
     return activeStore.getMessages(conversationId)
   }
@@ -180,6 +184,7 @@ export function createChatApp({ dataDirectory, transport, store }) {
     stop,
     connectToPeer,
     sendMessage,
+    listPeers,
     listConversations,
     getMessages,
     on,

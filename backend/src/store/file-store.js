@@ -125,6 +125,12 @@ export class FileStore {
       .map(clone)
   }
 
+  listPeers() {
+    this.#assertInitialized()
+
+    return this.state.peers.map(clone)
+  }
+
   listConversations() {
     this.#assertInitialized()
 
