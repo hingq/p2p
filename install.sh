@@ -12,7 +12,7 @@ fi
 cd "$ROOT_DIR"
 
 echo "Project root: $ROOT_DIR"
-echo "Installing dependencies for root workspace, backend, and frontend..."
+echo "Installing dependencies for Lerna-managed npm workspaces..."
 
 if [[ -f package-lock.json ]]; then
   npm ci

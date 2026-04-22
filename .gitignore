@@ -2,7 +2,7 @@ node_modules
 dist
 .vite
 coverage
-backend/.data
+packages/backend/.data
 .data
 pnpm-workspace.yaml
 .worktrees/
