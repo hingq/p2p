@@ -6,14 +6,12 @@ import { randomUUID } from 'node:crypto'
 import { createDirectConversationId } from '../protocol/codec.js'
 import { FileStore } from '../store/file-store.js'
 
-export function createChatApp({ dataDirectory, transport, store }) {
+export function createChatApp({ dataDirectory, transport }) {
   mkdirSync(dataDirectory, { recursive: true })
 
-  const activeStore =
-    store ??
-    new FileStore({
-      directory: join(dataDirectory, 'store')
-    })
+  const store = new FileStore({
+    directory: join(dataDirectory, 'store')
+  })
   const emitter = new EventEmitter()
 
   let localPeerId = null
@@ -22,7 +20,7 @@ export function createChatApp({ dataDirectory, transport, store }) {
 
   async function start() {
     if (!started) {
-      activeStore.initialize()
+      store.initialize()
       const nodeState = await transport.start()
       localPeerId = nodeState.peerId
       localAddresses = nodeState.addresses ?? []
@@ -49,7 +47,7 @@ export function createChatApp({ dataDirectory, transport, store }) {
 
     transport.off?.('message:received', handleIncomingMessage)
     await transport.stop()
-    activeStore.close()
+    store.close()
     localAddresses = []
     started = false
   }
@@ -58,13 +56,13 @@ export function createChatApp({ dataDirectory, transport, store }) {
     const peer = await transport.connectToPeer(multiaddr)
     const connectedAt = Date.now()
 
-    activeStore.upsertPeer({
+    store.upsertPeer({
       peerId: peer.peerId,
       addrs: [multiaddr],
       lastSeen: connectedAt,
       status: peer.status ?? 'connected'
     })
-    activeStore.upsertConversation({
+    store.upsertConversation({
       conversationId: createDirectConversationId(peer.peerId),
       type: 'direct',
       participants: [localPeerId, peer.peerId],
@@ -80,7 +78,7 @@ export function createChatApp({ dataDirectory, transport, store }) {
     const ts = Date.now()
     const conversationId = createDirectConversationId(peerId)
 
-    activeStore.upsertConversation({
+    store.upsertConversation({
       conversationId,
       type: 'direct',
       participants: [localPeerId, peerId],
@@ -98,7 +96,7 @@ export function createChatApp({ dataDirectory, transport, store }) {
       ts
     }
 
-    activeStore.saveMessage(message)
+    store.saveMessage(message)
 
     try {
       await transport.sendChatMessage({
@@ -109,13 +107,13 @@ export function createChatApp({ dataDirectory, transport, store }) {
         text,
         ts
       })
-      activeStore.updateMessageStatus(message.id, 'sent')
+      store.updateMessageStatus(message.id, 'sent')
     } catch (error) {
-      activeStore.updateMessageStatus(message.id, 'failed')
+      store.updateMessageStatus(message.id, 'failed')
       throw error
     }
 
-    const persistedMessage = activeStore.getMessages(conversationId).find((item) => item.id === message.id)
+    const persistedMessage = store.getMessages(conversationId).find((item) => item.id === message.id)
     emitter.emit('message:updated', {
       conversationId,
       message: persistedMessage
@@ -125,18 +123,18 @@ export function createChatApp({ dataDirectory, transport, store }) {
   }
 
   function listConversations() {
-    return activeStore.listConversations().map((conversation) => ({
+    return store.listConversations().map((conversation) => ({
       ...conversation,
       title: conversation.participants.find((participant) => participant !== localPeerId) ?? conversation.conversationId
     }))
   }
 
   function listPeers() {
-    return activeStore.listPeers()
+    return store.listPeers()
   }
 
   function getMessages(conversationId) {
-    return activeStore.getMessages(conversationId)
+    return store.getMessages(conversationId)
   }
 
   function on(eventName, listener) {
@@ -150,19 +148,19 @@ export function createChatApp({ dataDirectory, transport, store }) {
   function handleIncomingMessage(message) {
     const conversationId = createDirectConversationId(message.from)
 
-    activeStore.upsertConversation({
+    store.upsertConversation({
       conversationId,
       type: 'direct',
       participants: [localPeerId, message.from],
       updatedAt: message.ts
     })
-    activeStore.upsertPeer({
+    store.upsertPeer({
       peerId: message.from,
       addrs: [],
       lastSeen: message.ts,
       status: 'connected'
     })
-    activeStore.saveMessage({
+    store.saveMessage({
       id: message.id,
       conversationId,
       direction: 'in',
@@ -175,7 +173,7 @@ export function createChatApp({ dataDirectory, transport, store }) {
 
     emitter.emit('message:received', {
       conversationId,
-      message: activeStore.getMessages(conversationId).find((item) => item.id === message.id)
+      message: store.getMessages(conversationId).find((item) => item.id === message.id)
     })
   }
 

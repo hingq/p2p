@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import React from 'react'
+import { render } from 'ink-testing-library'
 
-import { createTerminalApp } from '../src/terminal/create-terminal-app.js'
+import { createTerminalApp, createTerminalController, TerminalScreen } from '../src/terminal/create-terminal-app.js'
 
 function createFakeChatApp() {
   const emitter = new EventEmitter()
@@ -87,79 +89,68 @@ function createFakeChatApp() {
   }
 }
 
-function createFakeTerminal() {
-  const stdin = new EventEmitter()
-  stdin.isTTY = true
-  stdin.setRawMode = vi.fn()
-  stdin.resume = vi.fn()
-  stdin.pause = vi.fn()
-
-  const stdout = {
-    isTTY: true,
-    columns: 120,
-    rows: 40,
-    write: vi.fn()
+function createStaticController(snapshot) {
+  return {
+    subscribe: () => () => {},
+    getSnapshot: () => snapshot,
+    handleInput: vi.fn(async () => {})
   }
-
-  return { stdin, stdout }
 }
 
-describe('terminal app', () => {
+describe('terminal controller', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
-  it('starts, connects a peer and sends a message', async () => {
+  it('starts, connects a peer from overview, then sends a message in conversations view', async () => {
     const chatApp = createFakeChatApp()
-    const { stdin, stdout } = createFakeTerminal()
     const onExit = vi.fn(async () => {})
-    const app = createTerminalApp({
+    const controller = createTerminalController({
       chatApp,
-      stdin,
-      stdout,
       onExit,
       now: () => 1000
     })
 
-    await app.start()
+    await controller.start()
+    expect(controller.getSnapshot().isReady).toBe(true)
+    expect(controller.getSnapshot().activeView).toBe('overview')
 
-    await app.handleKeypress('o', { name: 'o', ctrl: true })
+    await controller.handleInput('\r', { name: 'return' })
     for (const char of '/ip4/127.0.0.1/tcp/15002/ws/p2p/12D3KooWremote') {
-      await app.handleKeypress(char, { sequence: char })
+      await controller.handleInput(char, { sequence: char })
     }
-    await app.handleKeypress('\r', { name: 'return' })
+    await controller.handleInput('\r', { name: 'return' })
 
     expect(chatApp.connectToPeer).toHaveBeenCalledWith('/ip4/127.0.0.1/tcp/15002/ws/p2p/12D3KooWremote')
-    expect(app.state.selectedConversationId).toBe('peer:12D3KooWremote')
+    expect(controller.getSnapshot().selectedConversationId).toBe('peer:12D3KooWremote')
+    expect(controller.getSnapshot().activeView).toBe('conversations')
+    expect(controller.getSnapshot().focusArea).toBe('composer')
 
-    for (const char of 'hello from terminal') {
-      await app.handleKeypress(char, { sequence: char })
+    for (const char of 'hello from ink') {
+      await controller.handleInput(char, { sequence: char })
     }
-    await app.handleKeypress('\r', { name: 'return' })
+    await controller.handleInput('\r', { name: 'return' })
 
     expect(chatApp.sendMessage).toHaveBeenCalledWith({
       peerId: '12D3KooWremote',
-      text: 'hello from terminal'
+      text: 'hello from ink'
     })
-    expect(app.state.composerText).toBe('')
+    expect(controller.getSnapshot().composerText).toBe('')
 
-    await app.exit()
+    await controller.exit()
     expect(onExit).toHaveBeenCalledTimes(1)
   })
 
-  it('updates state when an inbound message event arrives', async () => {
+  it('updates cached messages when an inbound event arrives', async () => {
     const chatApp = createFakeChatApp()
-    const { stdin, stdout } = createFakeTerminal()
-    const app = createTerminalApp({
+    const controller = createTerminalController({
       chatApp,
-      stdin,
-      stdout,
       onExit: vi.fn(async () => {})
     })
 
-    await app.start()
+    await controller.start()
     await chatApp.connectToPeer('/ip4/127.0.0.1/tcp/15002/ws/p2p/12D3KooWremote')
-    await app.refreshData()
+    await controller.refreshData()
 
     chatApp.emit('message:received', {
       conversationId: 'peer:12D3KooWremote',
@@ -175,52 +166,100 @@ describe('terminal app', () => {
       }
     })
 
-    expect(app.state.messagesByConversation['peer:12D3KooWremote']).toEqual([
+    expect(controller.getSnapshot().messagesByConversation['peer:12D3KooWremote']).toEqual([
       expect.objectContaining({
         id: 'message-in',
         text: 'hello local peer'
       })
     ])
-    expect(app.state.statusMessage).toContain('New message')
-    expect(app.state.peers).toEqual([
-      expect.objectContaining({
-        peerId: '12D3KooWremote'
-      })
-    ])
+    expect(controller.getSnapshot().statusMessage).toContain('New message')
   })
 
-  it('treats q r c as plain text unless ctrl is pressed', async () => {
+  it('navigates between views and only writes plain text when composer is focused', async () => {
     const chatApp = createFakeChatApp()
-    const { stdin, stdout } = createFakeTerminal()
-    const onExit = vi.fn(async () => {})
-    const app = createTerminalApp({
+    const controller = createTerminalController({
       chatApp,
-      stdin,
-      stdout,
-      onExit
+      onExit: vi.fn(async () => {})
     })
 
-    await app.start()
+    await controller.start()
+    await controller.handleInput('q', { name: 'q', sequence: 'q' })
+    expect(controller.getSnapshot().composerText).toBe('')
 
-    await app.handleKeypress('c', { name: 'c', sequence: 'c' })
-    await app.handleKeypress('r', { name: 'r', sequence: 'r' })
-    await app.handleKeypress('q', { name: 'q', sequence: 'q' })
+    await controller.handleInput('', { name: 'right' })
+    expect(controller.getSnapshot().activeView).toBe('conversations')
+    expect(controller.getSnapshot().focusArea).toBe('conversation-list')
 
-    expect(app.state.mode).toBe('message')
-    expect(app.state.composerText).toBe('crq')
-    expect(onExit).not.toHaveBeenCalled()
+    await controller.handleInput('\t', { name: 'tab' })
+    expect(controller.getSnapshot().focusArea).toBe('composer')
 
-    await app.handleKeypress('o', { name: 'o', ctrl: true })
-    expect(app.state.mode).toBe('connect')
+    await controller.handleInput('q', { name: 'q', sequence: 'q' })
+    await controller.handleInput('r', { name: 'r', sequence: 'r' })
+    await controller.handleInput('c', { name: 'c', sequence: 'c' })
+    expect(controller.getSnapshot().composerText).toBe('qrc')
+  })
+})
 
-    await app.handleKeypress('q', { name: 'q', sequence: 'q' })
-    await app.handleKeypress('r', { name: 'r', sequence: 'r' })
-    await app.handleKeypress('c', { name: 'c', sequence: 'c' })
+describe('terminal screen', () => {
+  it('renders the overview shell for a ready node', () => {
+    const controller = createStaticController({
+      node: {
+        peerId: '12D3KooWlocal',
+        addresses: ['/ip4/127.0.0.1/tcp/15002/ws']
+      },
+      peers: [
+        {
+          peerId: '12D3KooWremote',
+          addrs: ['/ip4/127.0.0.1/tcp/15003/ws/p2p/12D3KooWremote'],
+          lastSeen: 10,
+          status: 'connected'
+        }
+      ],
+      conversations: [
+        {
+          conversationId: 'peer:12D3KooWremote',
+          title: '12D3KooWremote',
+          lastMessageText: 'hello',
+          updatedAt: 10
+        }
+      ],
+      messagesByConversation: {},
+      selectedConversationId: 'peer:12D3KooWremote',
+      selectedPeerIndex: 0,
+      overviewActionIndex: 0,
+      peerActionIndex: 0,
+      activeView: 'overview',
+      focusArea: 'overview-actions',
+      composerText: '',
+      connectText: '',
+      isConnectOpen: false,
+      isReady: true,
+      isBusy: false,
+      busyLabel: '',
+      statusMessage: 'Node ready.',
+      shouldExit: false
+    })
 
-    expect(app.state.promptText).toBe('qrc')
-    expect(onExit).not.toHaveBeenCalled()
+    const app = render(React.createElement(TerminalScreen, { controller }))
 
-    await app.handleKeypress('q', { name: 'q', ctrl: true })
-    expect(onExit).toHaveBeenCalledTimes(1)
+    expect(app.lastFrame()).toContain('P2P Chat Console')
+    expect(app.lastFrame()).toContain('Overview')
+    expect(app.lastFrame()).toContain('12D3KooWlocal')
+
+    app.unmount()
+  })
+})
+
+describe('terminal app', () => {
+  it('requires an interactive tty', async () => {
+    const chatApp = createFakeChatApp()
+    const app = createTerminalApp({
+      chatApp,
+      stdin: { isTTY: false },
+      stdout: { isTTY: false },
+      stderr: { isTTY: false }
+    })
+
+    await expect(app.start()).rejects.toThrow('Terminal UI requires an interactive TTY.')
   })
 })

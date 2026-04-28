@@ -4,5 +4,4 @@ dist
 coverage
 packages/backend/.data
 .data
-pnpm-workspace.yaml
 .worktrees/

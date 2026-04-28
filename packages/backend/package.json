@@ -18,16 +18,22 @@
     "@libp2p/ping": "^3.0.13",
     "@libp2p/websockets": "^10.1.6",
     "@multiformats/multiaddr": "^13.0.1",
-    "better-sqlite3": "^12.9.0",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "ink": "^6.3.1",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
     "it-length-prefixed": "^10.0.1",
     "it-pipe": "^3.0.1",
     "libp2p": "^3.1.6",
     "pino": "^10.3.1",
+    "react": "^19.2.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {
+    "@libp2p/crypto": "^5.1.13",
+    "@libp2p/peer-id": "^5.1.9",
+    "ink-testing-library": "^4.0.0",
     "tsx": "^4.19.4",
     "vitest": "^1.6.1"
   }

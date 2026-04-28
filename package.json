@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.28.1",
   "workspaces": [
     "packages/*"
   ],
+  "publishConfig": {
+    "registry": "https://registry.npmmirror.com"
+  },
   "scripts": {
     "dev": "lerna run dev --parallel",
     "dev:backend": "lerna run dev --scope backend",
