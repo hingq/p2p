@@ -93,7 +93,10 @@ function createStaticController(snapshot) {
   return {
     subscribe: () => () => {},
     getSnapshot: () => snapshot,
-    handleInput: vi.fn(async () => {})
+    setInputText: vi.fn(),
+    submitLine: vi.fn(async () => {}),
+    handleInput: vi.fn(async () => {}),
+    exit: vi.fn(async () => {})
   }
 }
 
@@ -102,7 +105,7 @@ describe('terminal controller', () => {
     vi.restoreAllMocks()
   })
 
-  it('starts, connects a peer from overview, then sends a message in conversations view', async () => {
+  it('connects with a command, selects the peer, then sends plain text as a message', async () => {
     const chatApp = createFakeChatApp()
     const onExit = vi.fn(async () => {})
     const controller = createTerminalController({
@@ -113,35 +116,45 @@ describe('terminal controller', () => {
 
     await controller.start()
     expect(controller.getSnapshot().isReady).toBe(true)
-    expect(controller.getSnapshot().activeView).toBe('overview')
+    expect(controller.getSnapshot().transcript.map((line) => line.text).join('\n')).toContain('/connect <multiaddr>')
 
-    await controller.handleInput('\r', { name: 'return' })
-    for (const char of '/ip4/127.0.0.1/tcp/15002/ws/p2p/12D3KooWremote') {
-      await controller.handleInput(char, { sequence: char })
-    }
-    await controller.handleInput('\r', { name: 'return' })
+    await controller.submitLine('/connect /ip4/127.0.0.1/tcp/15002/ws/p2p/12D3KooWremote')
 
     expect(chatApp.connectToPeer).toHaveBeenCalledWith('/ip4/127.0.0.1/tcp/15002/ws/p2p/12D3KooWremote')
-    expect(controller.getSnapshot().selectedConversationId).toBe('peer:12D3KooWremote')
-    expect(controller.getSnapshot().activeView).toBe('conversations')
-    expect(controller.getSnapshot().focusArea).toBe('composer')
+    expect(controller.getSnapshot().currentPeerId).toBe('12D3KooWremote')
+    expect(controller.getSnapshot().transcript.at(-1).text).toContain('Connected to 12D3KooWremote')
 
-    for (const char of 'hello from ink') {
-      await controller.handleInput(char, { sequence: char })
-    }
-    await controller.handleInput('\r', { name: 'return' })
+    await controller.submitLine('hello from command mode')
 
     expect(chatApp.sendMessage).toHaveBeenCalledWith({
       peerId: '12D3KooWremote',
-      text: 'hello from ink'
+      text: 'hello from command mode'
     })
-    expect(controller.getSnapshot().composerText).toBe('')
+    expect(controller.getSnapshot().inputText).toBe('')
+    expect(controller.getSnapshot().transcript.at(-1).text).toContain('me -> 12D3KooWremote')
 
-    await controller.exit()
+    await controller.submitLine('/quit')
     expect(onExit).toHaveBeenCalledTimes(1)
   })
 
-  it('updates cached messages when an inbound event arrives', async () => {
+  it('lists peers and switches chats with slash commands', async () => {
+    const chatApp = createFakeChatApp()
+    const controller = createTerminalController({
+      chatApp,
+      onExit: vi.fn(async () => {})
+    })
+
+    await controller.start()
+    await controller.submitLine('/connect /ip4/127.0.0.1/tcp/15002/ws/p2p/12D3KooWremote')
+    await controller.submitLine('/peers')
+    expect(controller.getSnapshot().transcript.at(-1).text).toContain('12D3KooWremote')
+
+    await controller.submitLine('/chat 12D3KooWremote')
+    expect(controller.getSnapshot().currentPeerId).toBe('12D3KooWremote')
+    expect(controller.getSnapshot().statusMessage).toContain('Chatting with')
+  })
+
+  it('records inbound messages in the command transcript', async () => {
     const chatApp = createFakeChatApp()
     const controller = createTerminalController({
       chatApp,
@@ -166,16 +179,11 @@ describe('terminal controller', () => {
       }
     })
 
-    expect(controller.getSnapshot().messagesByConversation['peer:12D3KooWremote']).toEqual([
-      expect.objectContaining({
-        id: 'message-in',
-        text: 'hello local peer'
-      })
-    ])
-    expect(controller.getSnapshot().statusMessage).toContain('New message')
+    expect(controller.getSnapshot().transcript.at(-1).text).toContain('12D3KooWremote -> me')
+    expect(controller.getSnapshot().transcript.at(-1).text).toContain('hello local peer')
   })
 
-  it('navigates between views and only writes plain text when composer is focused', async () => {
+  it('tab-completes slash commands from the current input', async () => {
     const chatApp = createFakeChatApp()
     const controller = createTerminalController({
       chatApp,
@@ -183,68 +191,71 @@ describe('terminal controller', () => {
     })
 
     await controller.start()
-    await controller.handleInput('q', { name: 'q', sequence: 'q' })
-    expect(controller.getSnapshot().composerText).toBe('')
+    controller.setInputText('/co')
 
-    await controller.handleInput('', { name: 'right' })
-    expect(controller.getSnapshot().activeView).toBe('conversations')
-    expect(controller.getSnapshot().focusArea).toBe('conversation-list')
+    await controller.handleInput('', { tab: true })
 
-    await controller.handleInput('\t', { name: 'tab' })
-    expect(controller.getSnapshot().focusArea).toBe('composer')
-
-    await controller.handleInput('q', { name: 'q', sequence: 'q' })
-    await controller.handleInput('r', { name: 'r', sequence: 'r' })
-    await controller.handleInput('c', { name: 'c', sequence: 'c' })
-    expect(controller.getSnapshot().composerText).toBe('qrc')
+    expect(controller.getSnapshot().inputText).toBe('/connect ')
   })
 })
 
 describe('terminal screen', () => {
-  it('renders the overview shell for a ready node', () => {
+  it('renders a command prompt instead of view navigation', () => {
     const controller = createStaticController({
       node: {
         peerId: '12D3KooWlocal',
         addresses: ['/ip4/127.0.0.1/tcp/15002/ws']
       },
-      peers: [
-        {
-          peerId: '12D3KooWremote',
-          addrs: ['/ip4/127.0.0.1/tcp/15003/ws/p2p/12D3KooWremote'],
-          lastSeen: 10,
-          status: 'connected'
-        }
-      ],
-      conversations: [
-        {
-          conversationId: 'peer:12D3KooWremote',
-          title: '12D3KooWremote',
-          lastMessageText: 'hello',
-          updatedAt: 10
-        }
-      ],
+      peers: [],
+      conversations: [],
       messagesByConversation: {},
-      selectedConversationId: 'peer:12D3KooWremote',
-      selectedPeerIndex: 0,
-      overviewActionIndex: 0,
-      peerActionIndex: 0,
-      activeView: 'overview',
-      focusArea: 'overview-actions',
-      composerText: '',
-      connectText: '',
-      isConnectOpen: false,
+      currentPeerId: '12D3KooWremote',
+      inputText: '',
+      transcript: [
+        { id: 1, kind: 'system', text: 'P2P chat ready.' },
+        { id: 2, kind: 'system', text: 'Commands: /help /connect <multiaddr> /peers /chat <peerId> /quit' }
+      ],
       isReady: true,
       isBusy: false,
       busyLabel: '',
-      statusMessage: 'Node ready.',
+      statusMessage: 'Chatting with 12D3KooWremote',
       shouldExit: false
     })
 
     const app = render(React.createElement(TerminalScreen, { controller }))
 
-    expect(app.lastFrame()).toContain('P2P Chat Console')
-    expect(app.lastFrame()).toContain('Overview')
-    expect(app.lastFrame()).toContain('12D3KooWlocal')
+    expect(app.lastFrame()).toContain('P2P Chat')
+    expect(app.lastFrame()).toContain('chat 12D3KooWremote')
+    expect(app.lastFrame()).toContain('>')
+    expect(app.lastFrame()).not.toContain('Overview')
+
+    app.unmount()
+  })
+
+  it('shows slash command hints while typing a command', () => {
+    const controller = createStaticController({
+      node: {
+        peerId: '12D3KooWlocal',
+        addresses: ['/ip4/127.0.0.1/tcp/15002/ws']
+      },
+      peers: [],
+      conversations: [],
+      messagesByConversation: {},
+      currentPeerId: null,
+      inputText: '/co',
+      transcript: [{ id: 1, kind: 'system', text: 'P2P chat ready.' }],
+      isReady: true,
+      isBusy: false,
+      busyLabel: '',
+      statusMessage: 'Ready.',
+      shouldExit: false
+    })
+
+    const app = render(React.createElement(TerminalScreen, { controller }))
+
+    expect(app.lastFrame()).toContain('/connect <multiaddr>')
+    expect(app.lastFrame()).toContain('/conversations')
+    expect(app.lastFrame()).not.toContain('/peers')
 
     app.unmount()
   })

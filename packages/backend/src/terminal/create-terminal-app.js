@@ -3,21 +3,21 @@ import { Box, Text, render, useInput } from 'ink'
 import TextInput from 'ink-text-input'
 import Spinner from 'ink-spinner'
 
-const VIEWS = ['overview', 'conversations', 'peers']
-const OVERVIEW_ACTIONS = ['connect', 'refresh', 'quit']
-const PEER_ACTIONS = ['open conversation', 'connect']
+const COMMANDS = [
+  { name: '/help', usage: '/help', description: 'Show commands' },
+  { name: '/connect', usage: '/connect <multiaddr>', description: 'Connect and select a peer' },
+  { name: '/peers', usage: '/peers', description: 'List known peers' },
+  { name: '/conversations', usage: '/conversations', description: 'List conversations' },
+  { name: '/chat', usage: '/chat <peerId>', description: 'Switch active chat' },
+  { name: '/messages', usage: '/messages [peerId]', description: 'Show recent messages' },
+  { name: '/refresh', usage: '/refresh', description: 'Refresh local data' },
+  { name: '/quit', usage: '/quit', description: 'Exit' }
+]
 
-function truncate(value, maxLength) {
-  if (!value) {
-    return ''
-  }
-
-  if (value.length <= maxLength) {
-    return value
-  }
-
-  return `${value.slice(0, Math.max(0, maxLength - 3))}...`
-}
+const HELP_LINES = [
+  `Commands: ${COMMANDS.map((command) => command.usage).join(' ')}`,
+  'When a chat is selected, type plain text and press Enter to send.'
+]
 
 function formatTimestamp(ts) {
   if (typeof ts !== 'number') {
@@ -37,34 +37,6 @@ function sortMessages(messages) {
   return [...messages].sort((left, right) => left.ts - right.ts || left.id.localeCompare(right.id))
 }
 
-function getViewLabel(view) {
-  if (view === 'overview') {
-    return 'Overview'
-  }
-
-  if (view === 'conversations') {
-    return 'Conversations'
-  }
-
-  return 'Peers'
-}
-
-function getDefaultFocusForView(view) {
-  if (view === 'conversations') {
-    return 'conversation-list'
-  }
-
-  if (view === 'peers') {
-    return 'peer-list'
-  }
-
-  return 'overview-actions'
-}
-
-function isPrintableInput(input, key = {}) {
-  return !key.ctrl && !key.meta && typeof input === 'string' && input >= ' '
-}
-
 function getPeerIdFromConversation(conversation) {
   if (conversation?.title) {
     return conversation.title
@@ -77,21 +49,24 @@ function getPeerIdFromConversation(conversation) {
   return ''
 }
 
+function getCommandSuggestions(inputText) {
+  if (!inputText.startsWith('/')) {
+    return []
+  }
+
+  const query = inputText.split(/\s+/, 1)[0]
+  return COMMANDS.filter((command) => command.name.startsWith(query))
+}
+
 function createInitialState() {
   return {
     node: null,
     peers: [],
     conversations: [],
     messagesByConversation: {},
-    selectedConversationId: null,
-    selectedPeerIndex: 0,
-    overviewActionIndex: 0,
-    peerActionIndex: 0,
-    activeView: 'overview',
-    focusArea: 'overview-actions',
-    composerText: '',
-    connectText: '',
-    isConnectOpen: false,
+    currentPeerId: null,
+    inputText: '',
+    transcript: [],
     isReady: false,
     isBusy: false,
     busyLabel: '',
@@ -104,6 +79,7 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
   let state = createInitialState()
   let started = false
   let exiting = false
+  let nextLineId = 1
   const subscribers = new Set()
   const listeners = new Map()
 
@@ -145,13 +121,25 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
     }))
   }
 
+  function appendTranscript(kind, text) {
+    updateState((current) => ({
+      ...current,
+      transcript: [...current.transcript, { id: nextLineId++, kind, text }].slice(-80)
+    }))
+  }
+
+  function appendHelp() {
+    for (const line of HELP_LINES) {
+      appendTranscript('system', line)
+    }
+  }
+
   function bindChatAppEvents() {
     const handlers = {
       'message:received': ({ conversationId, message }) => {
         updateState((current) => {
           const messages = current.messagesByConversation[conversationId] ?? []
           const nextMessages = sortMessages([...messages.filter((item) => item.id !== message.id), message])
-          const nextSelectedConversationId = current.selectedConversationId ?? conversationId
           const nextConversations = chatApp.listConversations()
           const nextPeers = chatApp.listPeers?.() ?? []
 
@@ -159,12 +147,19 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
             ...current,
             peers: nextPeers,
             conversations: nextConversations,
-            selectedConversationId: nextSelectedConversationId,
-            selectedPeerIndex: normalizePeerIndex(current.selectedPeerIndex, nextPeers.length),
+            currentPeerId: current.currentPeerId ?? message.from,
             messagesByConversation: {
               ...current.messagesByConversation,
               [conversationId]: nextMessages
             },
+            transcript: [
+              ...current.transcript,
+              {
+                id: nextLineId++,
+                kind: 'in',
+                text: `${formatTimestamp(message.ts)} ${message.from} -> me: ${message.text}`
+              }
+            ].slice(-80),
             statusMessage: `New message from ${message.from}`
           }
         })
@@ -185,18 +180,12 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
         })
       },
       'peer:connected': (peer) => {
-        updateState((current) => {
-          const nextPeers = chatApp.listPeers?.() ?? []
-          const nextConversations = chatApp.listConversations()
-
-          return {
-            ...current,
-            peers: nextPeers,
-            conversations: nextConversations,
-            selectedPeerIndex: normalizePeerIndex(current.selectedPeerIndex, nextPeers.length),
-            statusMessage: `Connected ${peer.peerId}`
-          }
-        })
+        updateState((current) => ({
+          ...current,
+          peers: chatApp.listPeers?.() ?? [],
+          conversations: chatApp.listConversations(),
+          statusMessage: `Connected ${peer.peerId}`
+        }))
       }
     }
 
@@ -214,38 +203,29 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
     listeners.clear()
   }
 
-  function normalizeConversationSelection(conversations, selectedConversationId) {
-    if (selectedConversationId && conversations.some((item) => item.conversationId === selectedConversationId)) {
-      return selectedConversationId
-    }
-
-    return conversations[0]?.conversationId ?? null
-  }
-
-  function normalizePeerIndex(index, length) {
-    if (length <= 0) {
-      return 0
-    }
-
-    return Math.max(0, Math.min(index, length - 1))
+  function getConversationForPeer(peerId) {
+    return state.conversations.find((conversation) => getPeerIdFromConversation(conversation) === peerId) ?? null
   }
 
   async function syncData({ reloadMessages = true } = {}) {
     const peers = chatApp.listPeers?.() ?? []
     const conversations = chatApp.listConversations()
-    const selectedConversationId = normalizeConversationSelection(conversations, state.selectedConversationId)
     const messagesByConversation = { ...state.messagesByConversation }
+    const currentPeerId = state.currentPeerId ?? getPeerIdFromConversation(conversations[0])
 
-    if (reloadMessages && selectedConversationId) {
-      messagesByConversation[selectedConversationId] = chatApp.getMessages(selectedConversationId)
+    if (reloadMessages) {
+      for (const conversation of conversations) {
+        if (!currentPeerId || getPeerIdFromConversation(conversation) === currentPeerId) {
+          messagesByConversation[conversation.conversationId] = chatApp.getMessages(conversation.conversationId)
+        }
+      }
     }
 
     updateState((current) => ({
       ...current,
       peers,
       conversations,
-      selectedConversationId,
-      selectedPeerIndex: normalizePeerIndex(current.selectedPeerIndex, peers.length),
+      currentPeerId,
       messagesByConversation
     }))
   }
@@ -261,103 +241,11 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
     updateState((current) => ({
       ...current,
       isReady: true,
-      statusMessage: 'Node ready. Use Left/Right to switch views.'
+      statusMessage: 'Ready.'
     }))
-  }
-
-  function getSelectedConversation(snapshot = state) {
-    return snapshot.conversations.find((conversation) => conversation.conversationId === snapshot.selectedConversationId) ?? null
-  }
-
-  function getSelectedPeer(snapshot = state) {
-    return snapshot.peers[snapshot.selectedPeerIndex] ?? null
-  }
-
-  function setActiveView(view) {
-    updateState((current) => ({
-      ...current,
-      activeView: view,
-      focusArea: getDefaultFocusForView(view)
-    }))
-  }
-
-  function moveView(delta) {
-    const currentIndex = VIEWS.indexOf(state.activeView)
-    const nextIndex = (currentIndex + delta + VIEWS.length) % VIEWS.length
-    setActiveView(VIEWS[nextIndex])
-  }
-
-  function moveConversationSelection(delta) {
-    if (state.conversations.length === 0) {
-      return
-    }
-
-    const currentIndex = state.conversations.findIndex((item) => item.conversationId === state.selectedConversationId)
-    const nextIndex = currentIndex === -1 ? 0 : (currentIndex + delta + state.conversations.length) % state.conversations.length
-    const selectedConversationId = state.conversations[nextIndex].conversationId
-    const messagesByConversation = {
-      ...state.messagesByConversation,
-      [selectedConversationId]: chatApp.getMessages(selectedConversationId)
-    }
-
-    updateState((current) => ({
-      ...current,
-      selectedConversationId,
-      messagesByConversation
-    }))
-  }
-
-  function movePeerSelection(delta) {
-    updateState((current) => ({
-      ...current,
-      selectedPeerIndex: normalizePeerIndex(current.selectedPeerIndex + delta, current.peers.length)
-    }))
-  }
-
-  function toggleConversationFocus() {
-    updateState((current) => ({
-      ...current,
-      focusArea: current.focusArea === 'conversation-list' ? 'composer' : 'conversation-list'
-    }))
-  }
-
-  function togglePeerFocus() {
-    updateState((current) => ({
-      ...current,
-      focusArea: current.focusArea === 'peer-list' ? 'peer-actions' : 'peer-list'
-    }))
-  }
-
-  function moveOverviewAction(delta) {
-    updateState((current) => ({
-      ...current,
-      overviewActionIndex: (current.overviewActionIndex + delta + OVERVIEW_ACTIONS.length) % OVERVIEW_ACTIONS.length
-    }))
-  }
-
-  function movePeerAction(delta) {
-    updateState((current) => ({
-      ...current,
-      peerActionIndex: (current.peerActionIndex + delta + PEER_ACTIONS.length) % PEER_ACTIONS.length
-    }))
-  }
-
-  function openConnectDialog(initialValue = '') {
-    updateState((current) => ({
-      ...current,
-      isConnectOpen: true,
-      connectText: initialValue,
-      statusMessage: initialValue ? 'Edit the multiaddr and press Enter.' : 'Enter a multiaddr and press Enter.'
-    }))
-  }
-
-  function closeConnectDialog() {
-    updateState((current) => ({
-      ...current,
-      isConnectOpen: false,
-      connectText: '',
-      statusMessage: 'Connect cancelled.'
-    }))
+    appendTranscript('system', `P2P chat ready. Peer ID: ${node.peerId}`)
+    appendTranscript('system', `Listen: ${node.addresses?.join(', ') || 'none'}`)
+    appendHelp()
   }
 
   async function refreshData() {
@@ -366,15 +254,22 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
     try {
       await syncData()
       setStatus(`Refreshed at ${formatTimestamp(now())}`)
+      appendTranscript('system', `Refreshed at ${formatTimestamp(now())}`)
     } finally {
       setBusy(false)
     }
   }
 
-  async function submitConnect() {
-    const multiaddr = state.connectText.trim()
+  function setInputText(inputText) {
+    updateState((current) => ({
+      ...current,
+      inputText
+    }))
+  }
 
+  async function connectToPeer(multiaddr) {
     if (!multiaddr) {
+      appendTranscript('error', 'Usage: /connect <multiaddr>')
       setStatus('Multiaddr is required.')
       return
     }
@@ -386,36 +281,29 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
       await syncData()
       updateState((current) => ({
         ...current,
-        activeView: 'conversations',
-        focusArea: 'composer',
-        isConnectOpen: false,
-        connectText: '',
-        selectedConversationId: `peer:${peer.peerId}`,
+        currentPeerId: peer.peerId,
         messagesByConversation: {
           ...current.messagesByConversation,
           [`peer:${peer.peerId}`]: chatApp.getMessages(`peer:${peer.peerId}`)
         },
-        statusMessage: `Connected ${peer.peerId}`
+        statusMessage: `Chatting with ${peer.peerId}`
       }))
+      appendTranscript('system', `Connected to ${peer.peerId}. Plain text now sends to this chat.`)
     } catch (error) {
-      setStatus(error.message ?? 'Connect failed.')
+      const message = error.message ?? 'Connect failed.'
+      appendTranscript('error', message)
+      setStatus(message)
     } finally {
       setBusy(false)
     }
   }
 
-  async function submitMessage() {
-    const text = state.composerText.trim()
-    const conversation = getSelectedConversation()
-    const peerId = getPeerIdFromConversation(conversation)
-
-    if (!text) {
-      setStatus('Message cannot be empty.')
-      return
-    }
+  async function sendMessage(text) {
+    const peerId = state.currentPeerId
 
     if (!peerId) {
-      setStatus('Select a conversation first.')
+      appendTranscript('error', 'No active chat. Use /connect <multiaddr> or /chat <peerId>.')
+      setStatus('Select a chat first.')
       return
     }
 
@@ -424,282 +312,171 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
     try {
       await chatApp.sendMessage({ peerId, text })
       await syncData()
-      updateState((current) => ({
-        ...current,
-        composerText: '',
-        statusMessage: `Sent to ${peerId}`
-      }))
+      appendTranscript('out', `${formatTimestamp(now())} me -> ${peerId}: ${text}`)
+      setStatus(`Sent to ${peerId}`)
     } catch (error) {
-      setStatus(error.message ?? 'Send failed.')
+      const message = error.message ?? 'Send failed.'
+      appendTranscript('error', message)
+      setStatus(message)
     } finally {
       setBusy(false)
     }
   }
 
-  function openConversationForPeer() {
-    const peer = getSelectedPeer()
-
-    if (!peer) {
-      setStatus('No peer selected.')
+  function listPeers() {
+    if (state.peers.length === 0) {
+      appendTranscript('system', 'No peers yet.')
       return
     }
 
-    const conversationId = `peer:${peer.peerId}`
-    const conversation = state.conversations.find((item) => item.conversationId === conversationId)
+    for (const peer of state.peers) {
+      appendTranscript('system', `${peer.peerId}  ${peer.status ?? 'unknown'}  ${(peer.addrs ?? []).join(', ')}`)
+    }
+  }
+
+  function listConversations() {
+    if (state.conversations.length === 0) {
+      appendTranscript('system', 'No conversations yet.')
+      return
+    }
+
+    for (const conversation of state.conversations) {
+      const peerId = getPeerIdFromConversation(conversation)
+      const preview = conversation.lastMessageText ? normalizeMessageText(conversation.lastMessageText) : 'No messages yet'
+      appendTranscript('system', `${peerId}  ${preview}`)
+    }
+  }
+
+  function showMessages(peerId = state.currentPeerId) {
+    if (!peerId) {
+      appendTranscript('error', 'Usage: /messages [peerId]')
+      return
+    }
+
+    const conversation = getConversationForPeer(peerId)
 
     if (!conversation) {
-      if (peer.addrs?.[0]) {
-        openConnectDialog(peer.addrs[0])
-        return
-      }
+      appendTranscript('error', `No conversation for ${peerId}.`)
+      return
+    }
 
-      setStatus('No conversation or peer address available.')
+    const messages = state.messagesByConversation[conversation.conversationId] ?? chatApp.getMessages(conversation.conversationId)
+
+    if (messages.length === 0) {
+      appendTranscript('system', `No messages with ${peerId}.`)
+      return
+    }
+
+    for (const message of messages.slice(-20)) {
+      const label = message.direction === 'out' ? `me -> ${peerId}` : `${message.from} -> me`
+      appendTranscript(message.direction === 'out' ? 'out' : 'in', `${formatTimestamp(message.ts)} ${label}: ${message.text}`)
+    }
+  }
+
+  function switchChat(peerId) {
+    if (!peerId) {
+      appendTranscript('error', 'Usage: /chat <peerId>')
+      return
+    }
+
+    const conversation = getConversationForPeer(peerId)
+
+    if (!conversation) {
+      appendTranscript('error', `No conversation for ${peerId}. Use /connect <multiaddr> first.`)
       return
     }
 
     updateState((current) => ({
       ...current,
-      activeView: 'conversations',
-      focusArea: 'composer',
-      selectedConversationId: conversation.conversationId,
+      currentPeerId: peerId,
       messagesByConversation: {
         ...current.messagesByConversation,
         [conversation.conversationId]: chatApp.getMessages(conversation.conversationId)
       },
-      statusMessage: `Opened conversation with ${peer.peerId}`
+      statusMessage: `Chatting with ${peerId}`
     }))
+    appendTranscript('system', `Chatting with ${peerId}.`)
   }
 
-  function connectSelectedPeer() {
-    const peer = getSelectedPeer()
+  async function runCommand(line) {
+    const [command, ...parts] = line.split(/\s+/)
+    const rest = parts.join(' ').trim()
 
-    if (!peer?.addrs?.[0]) {
-      setStatus('Selected peer has no saved address.')
+    if (command === '/help') {
+      appendHelp()
       return
     }
 
-    openConnectDialog(peer.addrs[0])
-  }
-
-  async function runOverviewAction() {
-    const action = OVERVIEW_ACTIONS[state.overviewActionIndex]
-
-    if (action === 'connect') {
-      openConnectDialog()
+    if (command === '/connect') {
+      await connectToPeer(rest)
       return
     }
 
-    if (action === 'refresh') {
+    if (command === '/peers') {
+      listPeers()
+      return
+    }
+
+    if (command === '/conversations') {
+      listConversations()
+      return
+    }
+
+    if (command === '/chat') {
+      switchChat(rest)
+      return
+    }
+
+    if (command === '/messages') {
+      showMessages(rest || state.currentPeerId)
+      return
+    }
+
+    if (command === '/refresh') {
       await refreshData()
       return
     }
 
-    await exit()
-  }
-
-  async function runPeerAction() {
-    const action = PEER_ACTIONS[state.peerActionIndex]
-
-    if (action === 'connect') {
-      connectSelectedPeer()
-      return
-    }
-
-    openConversationForPeer()
-  }
-
-  async function handleConnectInput(input, key = {}) {
-    if (key.name === 'escape') {
-      closeConnectDialog()
-      return
-    }
-
-    if (key.name === 'backspace') {
-      updateState((current) => ({
-        ...current,
-        connectText: current.connectText.slice(0, -1)
-      }))
-      return
-    }
-
-    if (key.name === 'return') {
-      await submitConnect()
-      return
-    }
-
-    if (isPrintableInput(input, key)) {
-      updateState((current) => ({
-        ...current,
-        connectText: current.connectText + input
-      }))
-    }
-  }
-
-  async function handleConversationInput(input, key = {}) {
-    if (key.name === 'tab') {
-      toggleConversationFocus()
-      return
-    }
-
-    if (state.focusArea === 'conversation-list') {
-      if (key.name === 'up') {
-        moveConversationSelection(-1)
-        return
-      }
-
-      if (key.name === 'down') {
-        moveConversationSelection(1)
-        return
-      }
-
-      if (key.name === 'return') {
-        updateState((current) => ({
-          ...current,
-          focusArea: 'composer'
-        }))
-      }
-
-      return
-    }
-
-    if (key.name === 'escape') {
-      updateState((current) => ({
-        ...current,
-        focusArea: 'conversation-list'
-      }))
-      return
-    }
-
-    if (key.name === 'backspace') {
-      updateState((current) => ({
-        ...current,
-        composerText: current.composerText.slice(0, -1)
-      }))
-      return
-    }
-
-    if (key.name === 'return') {
-      await submitMessage()
-      return
-    }
-
-    if (isPrintableInput(input, key)) {
-      updateState((current) => ({
-        ...current,
-        composerText: current.composerText + input
-      }))
-    }
-  }
-
-  async function handlePeerInput(input, key = {}) {
-    if (key.name === 'tab') {
-      togglePeerFocus()
-      return
-    }
-
-    if (state.focusArea === 'peer-list') {
-      if (key.name === 'up') {
-        movePeerSelection(-1)
-        return
-      }
-
-      if (key.name === 'down') {
-        movePeerSelection(1)
-        return
-      }
-
-      if (key.name === 'return') {
-        openConversationForPeer()
-      }
-
-      return
-    }
-
-    if (key.name === 'left') {
-      movePeerAction(-1)
-      return
-    }
-
-    if (key.name === 'right') {
-      movePeerAction(1)
-      return
-    }
-
-    if (key.name === 'escape') {
-      updateState((current) => ({
-        ...current,
-        focusArea: 'peer-list'
-      }))
-      return
-    }
-
-    if (key.name === 'return') {
-      await runPeerAction()
-    }
-  }
-
-  async function handleOverviewInput(key = {}) {
-    if (key.name === 'up') {
-      moveOverviewAction(-1)
-      return
-    }
-
-    if (key.name === 'down') {
-      moveOverviewAction(1)
-      return
-    }
-
-    if (key.name === 'return') {
-      await runOverviewAction()
-    }
-  }
-
-  async function handleInput(input, key = {}) {
-    if (state.shouldExit) {
-      return
-    }
-
-    if ((key.ctrl && key.name === 'c') || key.sequence === '\u0003') {
+    if (command === '/quit' || command === '/exit') {
       await exit()
       return
     }
 
-    if (key.ctrl && key.name === 'r') {
-      await refreshData()
+    appendTranscript('error', `Unknown command: ${command}. Type /help.`)
+  }
+
+  async function submitLine(line = state.inputText) {
+    const text = line.trim()
+    setInputText('')
+
+    if (!text) {
       return
     }
 
-    if (state.isConnectOpen) {
-      await handleConnectInput(input, key)
+    appendTranscript('input', `> ${text}`)
+
+    if (text.startsWith('/')) {
+      await runCommand(text)
       return
     }
 
-    if (state.activeView === 'peers' && state.focusArea === 'peer-actions') {
-      await handlePeerInput(input, key)
+    await sendMessage(text)
+  }
+
+  async function handleInput(input, key = {}) {
+    if (key.tab && state.inputText.startsWith('/')) {
+      const [suggestion] = getCommandSuggestions(state.inputText)
+
+      if (suggestion) {
+        setInputText(`${suggestion.name} `)
+      }
+
       return
     }
 
-    if (key.name === 'left') {
-      moveView(-1)
-      return
+    if ((key.ctrl && (input === 'c' || key.name === 'c')) || key.sequence === '\u0003') {
+      await exit()
     }
-
-    if (key.name === 'right') {
-      moveView(1)
-      return
-    }
-
-    if (state.activeView === 'conversations') {
-      await handleConversationInput(input, key)
-      return
-    }
-
-    if (state.activeView === 'peers') {
-      await handlePeerInput(input, key)
-      return
-    }
-
-    await handleOverviewInput(key)
   }
 
   async function start() {
@@ -719,7 +496,8 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
     exiting = true
     updateState((current) => ({
       ...current,
-      shouldExit: true
+      shouldExit: true,
+      statusMessage: 'Exiting...'
     }))
     unbindChatAppEvents()
     await onExit()
@@ -731,6 +509,8 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
     start,
     exit,
     refreshData,
+    setInputText,
+    submitLine,
     handleInput
   }
 }
@@ -739,328 +519,118 @@ function useControllerState(controller) {
   return useSyncExternalStore(controller.subscribe, controller.getSnapshot)
 }
 
-function Section({ title, children, grow = false }) {
-  return React.createElement(
-    Box,
-    {
-      borderStyle: 'round',
-      borderColor: 'gray',
-      paddingX: 1,
-      paddingY: 0,
-      flexDirection: 'column',
-      flexGrow: grow ? 1 : 0,
-      width: grow ? undefined : '100%'
-    },
-    React.createElement(Text, { color: 'cyanBright' }, title),
-    children
-  )
-}
-
-function BulletList({ items, emptyLabel, selectedIndex = -1, dimUnselected = false }) {
-  if (items.length === 0) {
-    return React.createElement(Text, { color: 'gray' }, emptyLabel)
+function getLineColor(kind) {
+  if (kind === 'error') {
+    return 'redBright'
   }
 
-  return React.createElement(
-    Box,
-    { flexDirection: 'column' },
-    ...items.map((item, index) =>
-      React.createElement(
-        Text,
-        {
-          key: `${item.key ?? item.label}-${index}`,
-          color: index === selectedIndex ? 'greenBright' : undefined,
-          dimColor: dimUnselected && index !== selectedIndex
-        },
-        `${index === selectedIndex ? '›' : ' '} ${item.label}`
-      )
-    )
-  )
+  if (kind === 'input') {
+    return 'cyanBright'
+  }
+
+  if (kind === 'in') {
+    return 'greenBright'
+  }
+
+  if (kind === 'out') {
+    return 'blueBright'
+  }
+
+  return undefined
 }
 
 function renderHeader(state) {
   const peerId = state.node?.peerId ?? 'starting'
-  const readiness = state.isReady ? 'ready' : 'booting'
+  const chatLabel = state.currentPeerId ? `chat ${state.currentPeerId}` : 'no active chat'
 
   return React.createElement(
     Box,
     { justifyContent: 'space-between' },
-    React.createElement(
-      Text,
-      { color: 'blueBright' },
-      `P2P Chat Console  peer ${peerId}`
-    ),
+    React.createElement(Text, { color: 'blueBright' }, `P2P Chat  peer ${peerId}`),
     React.createElement(
       Text,
       { color: state.isBusy ? 'yellowBright' : 'greenBright' },
-      state.isBusy ? `${state.busyLabel}...` : readiness
+      state.isBusy ? `${state.busyLabel}...` : chatLabel
     )
   )
 }
 
-function renderNav(state) {
+function renderTranscript(state) {
+  const lines = state.transcript.slice(-22)
+
+  if (lines.length === 0) {
+    return React.createElement(Text, { color: 'gray' }, 'Starting...')
+  }
+
   return React.createElement(
     Box,
-    { marginTop: 1, marginBottom: 1 },
-    ...VIEWS.map((view, index) =>
+    { flexDirection: 'column', marginTop: 1, flexGrow: 1 },
+    ...lines.map((line) =>
       React.createElement(
         Text,
         {
-          key: view,
-          color: state.activeView === view ? 'black' : 'gray',
-          backgroundColor: state.activeView === view ? 'cyan' : undefined
+          key: line.id,
+          color: getLineColor(line.kind),
+          wrap: 'truncate-end'
         },
-        `${index > 0 ? '  ' : ''}${getViewLabel(view)}`
+        line.text
       )
     )
   )
 }
 
-function renderOverview(state) {
-  const recentPeers = state.peers.slice(0, 4).map((peer) => ({
-    key: peer.peerId,
-    label: `${truncate(peer.peerId, 24)}  ${peer.status ?? 'unknown'}`
-  }))
-  const recentConversations = state.conversations.slice(0, 4).map((conversation) => {
-    const preview = conversation.lastMessageText ? normalizeMessageText(conversation.lastMessageText) : 'No messages yet'
-    return {
-      key: conversation.conversationId,
-      label: `${truncate(conversation.title ?? conversation.conversationId, 16)}  ${truncate(preview, 28)}`
-    }
-  })
-  const addresses = state.node?.addresses?.length ? state.node.addresses.join(', ') : 'No listen addresses'
+function renderPrompt(state, controller) {
+  const placeholder = state.currentPeerId ? `message ${state.currentPeerId} or /help` : '/connect <multiaddr> or /help'
 
   return React.createElement(
     Box,
-    { flexDirection: 'column', flexGrow: 1 },
-    React.createElement(
-      Box,
-      { columnGap: 1 },
-      React.createElement(
-        Box,
-        { flexDirection: 'column', flexGrow: 1, width: '58%' },
-        React.createElement(
-          Section,
-          { title: 'Node' },
-          React.createElement(Text, null, `Peer ID: ${state.node?.peerId ?? 'starting'}`),
-          React.createElement(Text, null, `Peers: ${state.peers.length}`),
-          React.createElement(Text, null, `Conversations: ${state.conversations.length}`),
-          React.createElement(Text, { wrap: 'truncate-end' }, `Listen: ${addresses}`)
-        ),
-        React.createElement(
-          Box,
-          { marginTop: 1 },
-          React.createElement(
-            Section,
-            { title: 'Actions' },
-            React.createElement(
-              BulletList,
-              {
-                items: OVERVIEW_ACTIONS.map((action) => ({ key: action, label: action })),
-                emptyLabel: 'No actions.',
-                selectedIndex: state.overviewActionIndex
-              }
-            )
-          )
-        )
-      ),
-      React.createElement(
-        Box,
-        { flexDirection: 'column', flexGrow: 1 },
-        React.createElement(
-          Section,
-          { title: 'Recent Peers' },
-          React.createElement(BulletList, {
-            items: recentPeers,
-            emptyLabel: 'No peers connected yet.'
-          })
-        ),
-        React.createElement(
-          Box,
-          { marginTop: 1 },
-          React.createElement(
-            Section,
-            { title: 'Recent Conversations' },
-            React.createElement(BulletList, {
-              items: recentConversations,
-              emptyLabel: 'No conversations yet.'
-            })
-          )
-        )
-      )
-    )
+    { marginTop: 1 },
+    React.createElement(Text, { color: 'cyanBright' }, '> '),
+    React.createElement(TextInput, {
+      value: state.inputText,
+      placeholder,
+      focus: state.isReady && !state.shouldExit,
+      showCursor: state.isReady && !state.shouldExit,
+      onChange: controller.setInputText,
+      onSubmit: (value) => {
+        void controller.submitLine(value)
+      }
+    })
   )
 }
 
-function renderConversationView(state) {
-  const selectedConversation = state.conversations.find((item) => item.conversationId === state.selectedConversationId) ?? null
-  const messages = selectedConversation ? state.messagesByConversation[selectedConversation.conversationId] ?? [] : []
-  const conversationItems = state.conversations.map((conversation) => {
-    const preview = conversation.lastMessageText ? normalizeMessageText(conversation.lastMessageText) : 'No messages yet'
-    return {
-      key: conversation.conversationId,
-      label: `${truncate(conversation.title ?? conversation.conversationId, 14)}  ${truncate(preview, 20)}`
-    }
-  })
+function renderCommandHints(state) {
+  const suggestions = getCommandSuggestions(state.inputText).slice(0, 6)
 
-  return React.createElement(
-    Box,
-    { columnGap: 1, flexGrow: 1 },
-    React.createElement(
-      Box,
-      { width: '34%', flexDirection: 'column' },
-      React.createElement(
-        Section,
-        { title: `Conversations ${state.focusArea === 'conversation-list' ? '[focus]' : ''}`, grow: true },
-        React.createElement(BulletList, {
-          items: conversationItems,
-          emptyLabel: 'No conversations yet.',
-          selectedIndex: state.conversations.findIndex((item) => item.conversationId === state.selectedConversationId),
-          dimUnselected: true
-        })
-      )
-    ),
-    React.createElement(
-      Box,
-      { flexDirection: 'column', flexGrow: 1 },
-      React.createElement(
-        Section,
-        {
-          title: selectedConversation
-            ? `Thread ${selectedConversation.title ?? selectedConversation.conversationId}`
-            : 'Thread',
-          grow: true
-        },
-        messages.length === 0
-          ? React.createElement(Text, { color: 'gray' }, 'Nothing to show.')
-          : React.createElement(
-              Box,
-              { flexDirection: 'column' },
-              ...messages.slice(-12).map((message) =>
-                React.createElement(
-                  Text,
-                  { key: message.id, wrap: 'truncate-end' },
-                  `${formatTimestamp(message.ts)} ${message.direction === 'out' ? 'me' : truncate(message.from ?? 'peer', 12)} ${message.status}  ${truncate(message.text, 72)}`
-                )
-              )
-            )
-      ),
-      React.createElement(
-        Box,
-        { marginTop: 1 },
-        React.createElement(
-          Section,
-          { title: `Message ${state.focusArea === 'composer' ? '[focus]' : ''}` },
-          React.createElement(TextInput, {
-            value: state.composerText,
-            placeholder: selectedConversation ? 'Type a message and press Enter' : 'Select a conversation first',
-            focus: state.focusArea === 'composer' && !state.isConnectOpen,
-            showCursor: state.focusArea === 'composer' && !state.isConnectOpen,
-            onChange: () => {}
-          })
-        )
-      )
-    )
-  )
-}
-
-function renderPeersView(state) {
-  const selectedPeer = state.peers[state.selectedPeerIndex] ?? null
-  const peerItems = state.peers.map((peer) => ({
-    key: peer.peerId,
-    label: `${truncate(peer.peerId, 18)}  ${peer.status ?? 'unknown'}`
-  }))
-  const addresses = selectedPeer?.addrs?.length ? selectedPeer.addrs.join(', ') : 'No saved addresses'
-
-  return React.createElement(
-    Box,
-    { columnGap: 1, flexGrow: 1 },
-    React.createElement(
-      Box,
-      { width: '34%', flexDirection: 'column' },
-      React.createElement(
-        Section,
-        { title: `Known Peers ${state.focusArea === 'peer-list' ? '[focus]' : ''}`, grow: true },
-        React.createElement(BulletList, {
-          items: peerItems,
-          emptyLabel: 'No peers yet.',
-          selectedIndex: state.selectedPeerIndex,
-          dimUnselected: true
-        })
-      )
-    ),
-    React.createElement(
-      Box,
-      { flexDirection: 'column', flexGrow: 1 },
-      React.createElement(
-        Section,
-        { title: 'Peer Details' },
-        selectedPeer
-          ? React.createElement(
-              Box,
-              { flexDirection: 'column' },
-              React.createElement(Text, null, `Peer ID: ${selectedPeer.peerId}`),
-              React.createElement(Text, null, `Status: ${selectedPeer.status ?? 'unknown'}`),
-              React.createElement(Text, null, `Last seen: ${formatTimestamp(selectedPeer.lastSeen)}`),
-              React.createElement(Text, { wrap: 'truncate-end' }, `Addresses: ${addresses}`)
-            )
-          : React.createElement(Text, { color: 'gray' }, 'Select a peer to inspect.')
-      ),
-      React.createElement(
-        Box,
-        { marginTop: 1 },
-        React.createElement(
-          Section,
-          { title: `Peer Actions ${state.focusArea === 'peer-actions' ? '[focus]' : ''}` },
-          React.createElement(BulletList, {
-            items: PEER_ACTIONS.map((action) => ({ key: action, label: action })),
-            emptyLabel: 'No actions.',
-            selectedIndex: state.peerActionIndex
-          })
-        )
-      )
-    )
-  )
-}
-
-function renderConnectDialog(state) {
-  if (!state.isConnectOpen) {
+  if (suggestions.length === 0) {
     return null
   }
 
   return React.createElement(
     Box,
-    { marginBottom: 1 },
-    React.createElement(
-      Section,
-      { title: 'Connect' },
-      React.createElement(Text, { color: 'gray' }, 'Paste a multiaddr, press Enter to connect, Esc to cancel.'),
-      React.createElement(TextInput, {
-        value: state.connectText,
-        placeholder: '/ip4/127.0.0.1/tcp/15002/ws/p2p/<peerId>',
-        focus: true,
-        showCursor: true,
-        onChange: () => {}
-      })
+    { flexDirection: 'column', marginLeft: 2 },
+    ...suggestions.map((command, index) =>
+      React.createElement(
+        Text,
+        {
+          key: command.name,
+          color: index === 0 ? 'cyanBright' : 'gray'
+        },
+        `${command.usage}  ${command.description}`
+      )
     )
   )
 }
 
 function renderFooter(state) {
-  const shortcutText =
-    state.activeView === 'conversations'
-      ? 'Left/Right switch view  Tab toggle focus  Up/Down move  Enter submit  Ctrl+R refresh  Ctrl+C quit'
-      : 'Left/Right switch view  Up/Down move  Enter select  Tab focus  Ctrl+R refresh  Ctrl+C quit'
-
   return React.createElement(
     Box,
     { flexDirection: 'column', marginTop: 1 },
     React.createElement(
       Text,
-      { color: state.statusMessage.toLowerCase().includes('failed') ? 'redBright' : 'yellowBright', wrap: 'truncate-end' },
-      `Status: ${state.statusMessage}`
-    ),
-    React.createElement(Text, { color: 'gray', wrap: 'truncate-end' }, shortcutText)
+      { color: state.statusMessage.toLowerCase().includes('failed') ? 'redBright' : 'gray', wrap: 'truncate-end' },
+      state.statusMessage
+    )
   )
 }
 
@@ -1075,28 +645,16 @@ export function TerminalScreen({ controller }) {
     Box,
     { flexDirection: 'column', paddingX: 1, paddingY: 0 },
     renderHeader(state),
-    renderNav(state),
-    renderConnectDialog(state),
     !state.isReady
       ? React.createElement(
           Box,
           { marginTop: 1 },
-          React.createElement(
-            Section,
-            { title: 'Booting' },
-            React.createElement(
-              Box,
-              null,
-              React.createElement(Spinner, { type: 'dots' }),
-              React.createElement(Text, null, ` ${state.statusMessage}`)
-            )
-          )
-        )
-      : state.activeView === 'conversations'
-        ? renderConversationView(state)
-        : state.activeView === 'peers'
-          ? renderPeersView(state)
-          : renderOverview(state),
+          React.createElement(Spinner, { type: 'dots' }),
+          React.createElement(Text, null, ` ${state.statusMessage}`)
+      )
+      : renderTranscript(state),
+    renderPrompt(state, controller),
+    renderCommandHints(state),
     renderFooter(state)
   )
 }
