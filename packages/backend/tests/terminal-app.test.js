@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events'
 import React from 'react'
 import { render } from 'ink-testing-library'
 
-import { createTerminalApp, createTerminalController, TerminalScreen } from '../src/terminal/create-terminal-app.js'
+import { createTerminalApp, createTerminalController, getLineColor, getStatusColor, TerminalScreen } from '../src/terminal/create-terminal-app.js'
 
 function createFakeChatApp() {
   const emitter = new EventEmitter()
@@ -196,6 +196,61 @@ describe('terminal controller', () => {
     await controller.handleInput('', { tab: true })
 
     expect(controller.getSnapshot().inputText).toBe('/connect ')
+  })
+
+  it('selects slash command hints with arrow keys before tab completion', async () => {
+    const chatApp = createFakeChatApp()
+    const controller = createTerminalController({
+      chatApp,
+      onExit: vi.fn(async () => {})
+    })
+
+    await controller.start()
+    controller.setInputText('/')
+
+    await controller.handleInput('', { downArrow: true })
+    await controller.handleInput('', { tab: true })
+
+    expect(controller.getSnapshot().inputText).toBe('/connect ')
+  })
+
+  it('uses separate transcript kinds for command input, success, data, messages, and errors', async () => {
+    const chatApp = createFakeChatApp()
+    const controller = createTerminalController({
+      chatApp,
+      onExit: vi.fn(async () => {})
+    })
+
+    await controller.start()
+    await controller.submitLine('/connect /ip4/127.0.0.1/tcp/15002/ws/p2p/12D3KooWremote')
+    await controller.submitLine('/peers')
+    await controller.submitLine('/unknown')
+
+    const transcript = controller.getSnapshot().transcript
+
+    expect(transcript.find((line) => line.text.startsWith('> /connect'))?.kind).toBe('input')
+    expect(transcript.find((line) => line.text.includes('Connected to 12D3KooWremote'))?.kind).toBe('success')
+    expect(transcript.find((line) => line.text.includes('12D3KooWremote  connected'))?.kind).toBe('data')
+    expect(transcript.at(-1).kind).toBe('error')
+  })
+})
+
+describe('terminal colors', () => {
+  it('maps transcript line kinds to distinct colors', () => {
+    expect(getLineColor('error')).toBe('redBright')
+    expect(getLineColor('input')).toBe('cyanBright')
+    expect(getLineColor('success')).toBe('greenBright')
+    expect(getLineColor('data')).toBe('magentaBright')
+    expect(getLineColor('in')).toBe('green')
+    expect(getLineColor('out')).toBe('blueBright')
+    expect(getLineColor('system')).toBe('gray')
+  })
+
+  it('colors status messages by state', () => {
+    expect(getStatusColor('Connect failed.')).toBe('redBright')
+    expect(getStatusColor('Multiaddr is required.')).toBe('yellowBright')
+    expect(getStatusColor('Chatting with 12D3KooWremote')).toBe('greenBright')
+    expect(getStatusColor('Ready.')).toBe('gray')
   })
 })
 

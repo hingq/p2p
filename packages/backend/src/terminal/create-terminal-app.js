@@ -66,6 +66,7 @@ function createInitialState() {
     messagesByConversation: {},
     currentPeerId: null,
     inputText: '',
+    commandSuggestionIndex: 0,
     transcript: [],
     isReady: false,
     isBusy: false,
@@ -254,7 +255,7 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
     try {
       await syncData()
       setStatus(`Refreshed at ${formatTimestamp(now())}`)
-      appendTranscript('system', `Refreshed at ${formatTimestamp(now())}`)
+      appendTranscript('success', `Refreshed at ${formatTimestamp(now())}`)
     } finally {
       setBusy(false)
     }
@@ -263,7 +264,8 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
   function setInputText(inputText) {
     updateState((current) => ({
       ...current,
-      inputText
+      inputText,
+      commandSuggestionIndex: 0
     }))
   }
 
@@ -288,7 +290,7 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
         },
         statusMessage: `Chatting with ${peer.peerId}`
       }))
-      appendTranscript('system', `Connected to ${peer.peerId}. Plain text now sends to this chat.`)
+      appendTranscript('success', `Connected to ${peer.peerId}. Plain text now sends to this chat.`)
     } catch (error) {
       const message = error.message ?? 'Connect failed.'
       appendTranscript('error', message)
@@ -330,7 +332,7 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
     }
 
     for (const peer of state.peers) {
-      appendTranscript('system', `${peer.peerId}  ${peer.status ?? 'unknown'}  ${(peer.addrs ?? []).join(', ')}`)
+      appendTranscript('data', `${peer.peerId}  ${peer.status ?? 'unknown'}  ${(peer.addrs ?? []).join(', ')}`)
     }
   }
 
@@ -343,7 +345,7 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
     for (const conversation of state.conversations) {
       const peerId = getPeerIdFromConversation(conversation)
       const preview = conversation.lastMessageText ? normalizeMessageText(conversation.lastMessageText) : 'No messages yet'
-      appendTranscript('system', `${peerId}  ${preview}`)
+      appendTranscript('data', `${peerId}  ${preview}`)
     }
   }
 
@@ -395,7 +397,7 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
       },
       statusMessage: `Chatting with ${peerId}`
     }))
-    appendTranscript('system', `Chatting with ${peerId}.`)
+    appendTranscript('success', `Chatting with ${peerId}.`)
   }
 
   async function runCommand(line) {
@@ -464,8 +466,24 @@ export function createTerminalController({ chatApp, onExit = () => {}, now = () 
   }
 
   async function handleInput(input, key = {}) {
+    if ((key.upArrow || key.downArrow) && state.inputText.startsWith('/')) {
+      const suggestions = getCommandSuggestions(state.inputText)
+
+      if (suggestions.length > 0) {
+        const direction = key.downArrow ? 1 : -1
+        updateState((current) => ({
+          ...current,
+          commandSuggestionIndex:
+            (current.commandSuggestionIndex + direction + suggestions.length) % suggestions.length
+        }))
+      }
+
+      return
+    }
+
     if (key.tab && state.inputText.startsWith('/')) {
-      const [suggestion] = getCommandSuggestions(state.inputText)
+      const suggestions = getCommandSuggestions(state.inputText)
+      const suggestion = suggestions[Math.min(state.commandSuggestionIndex, suggestions.length - 1)]
 
       if (suggestion) {
         setInputText(`${suggestion.name} `)
@@ -519,7 +537,7 @@ function useControllerState(controller) {
   return useSyncExternalStore(controller.subscribe, controller.getSnapshot)
 }
 
-function getLineColor(kind) {
+export function getLineColor(kind) {
   if (kind === 'error') {
     return 'redBright'
   }
@@ -528,15 +546,41 @@ function getLineColor(kind) {
     return 'cyanBright'
   }
 
-  if (kind === 'in') {
+  if (kind === 'success') {
     return 'greenBright'
+  }
+
+  if (kind === 'data') {
+    return 'magentaBright'
+  }
+
+  if (kind === 'in') {
+    return 'green'
   }
 
   if (kind === 'out') {
     return 'blueBright'
   }
 
-  return undefined
+  return 'gray'
+}
+
+export function getStatusColor(message) {
+  const normalized = message.toLowerCase()
+
+  if (normalized.includes('failed') || normalized.includes('error')) {
+    return 'redBright'
+  }
+
+  if (normalized.includes('required') || normalized.includes('select')) {
+    return 'yellowBright'
+  }
+
+  if (normalized.includes('connected') || normalized.includes('chatting') || normalized.includes('sent')) {
+    return 'greenBright'
+  }
+
+  return 'gray'
 }
 
 function renderHeader(state) {
@@ -606,6 +650,8 @@ function renderCommandHints(state) {
     return null
   }
 
+  const selectedIndex = Math.min(state.commandSuggestionIndex, suggestions.length - 1)
+
   return React.createElement(
     Box,
     { flexDirection: 'column', marginLeft: 2 },
@@ -614,7 +660,7 @@ function renderCommandHints(state) {
         Text,
         {
           key: command.name,
-          color: index === 0 ? 'cyanBright' : 'gray'
+          color: index === selectedIndex ? 'cyanBright' : 'gray'
         },
         `${command.usage}  ${command.description}`
       )
@@ -628,7 +674,7 @@ function renderFooter(state) {
     { flexDirection: 'column', marginTop: 1 },
     React.createElement(
       Text,
-      { color: state.statusMessage.toLowerCase().includes('failed') ? 'redBright' : 'gray', wrap: 'truncate-end' },
+      { color: getStatusColor(state.statusMessage), wrap: 'truncate-end' },
       state.statusMessage
     )
   )
